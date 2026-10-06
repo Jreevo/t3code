@@ -7315,9 +7315,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
         );
         assert.equal(ownWorkSubagentEvents(harness.events).at(-1)?.subagent.status, "running");
-        // Nothing runs anymore, so it no longer pins the session or blocks a
-        // model change.
-        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        // It still pins the session, so the next turn can settle it.
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
 
         // The next turn settles it with its interim result.
         yield* harness.runtime.startTurn(

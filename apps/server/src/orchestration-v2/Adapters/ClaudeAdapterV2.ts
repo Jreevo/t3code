@@ -3192,11 +3192,12 @@ export function makeClaudeAdapterV2(
               [...(current.get(nativeThreadId)?.values() ?? [])].includes(taskId),
             ),
           );
-        // Runs whose turn ended without completing. Their ingestion stopped,
-        // so a subagent they launched cannot continue on them when it resumes.
+        // Runs whose turn ended without completing and that a running
+        // subagent is still attributed to. Their ingestion stopped, so that
+        // subagent cannot continue on them when it resumes.
         const runsEndedWithoutCompleting = yield* Ref.make<ReadonlySet<string>>(new Set());
         // Running only until the next turn settles it: its work ended and no
-        // resume came. Background-work probes must not count it.
+        // resume came. It must not refuse that turn's model change.
         const awaitsEndedOwnBackgroundWork = Effect.fnUntraced(function* (taskId: string) {
           const awaiting = (yield* Ref.get(subagentsAwaitingOwnBackgroundWork)).get(taskId);
           return (
@@ -5029,11 +5030,23 @@ export function makeClaudeAdapterV2(
           readonly threadDisposition?: "reusable" | "broken";
           readonly result?: SDKResultMessage;
         }) {
-          if (input.status !== "completed") {
-            yield* Ref.update(runsEndedWithoutCompleting, (current) =>
-              new Set(current).add(input.context.input.runId),
-            );
-          }
+          const runningSubagentRunIds = new Set<string>(
+            [...(yield* Ref.get(sessionSubagentsByTaskId)).values()].flatMap((subagent) =>
+              subagent.task.status === "running" && subagent.task.runId !== null
+                ? [subagent.task.runId]
+                : [],
+            ),
+          );
+          yield* Ref.update(
+            runsEndedWithoutCompleting,
+            (current) =>
+              new Set(
+                [
+                  ...current,
+                  ...(input.status === "completed" ? [] : [input.context.input.runId]),
+                ].filter((runId) => runningSubagentRunIds.has(runId)),
+              ),
+          );
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
           for (const toolCall of input.context.toolCalls.values()) {
             const artifacts = buildToolCallArtifacts({
@@ -7826,11 +7839,8 @@ export function makeClaudeAdapterV2(
                 return true;
               }
             }
-            for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
-              if (
-                subagent.task.status === "running" &&
-                !(yield* awaitsEndedOwnBackgroundWork(taskId))
-              ) {
+            for (const subagent of (yield* Ref.get(sessionSubagentsByTaskId)).values()) {
+              if (subagent.task.status === "running") {
                 return true;
               }
             }
